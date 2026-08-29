@@ -94,15 +94,8 @@ export default function SavedPlanesModal({ isOpen, onClose }) {
               </div>
             )}
 
-            {(detail.data?.departure || detail.data?.arrival) && (
-              <div style={{ background: '#fff', padding: '8px', borderRadius: '4px', border: '1px solid #e2e8f0', marginBottom: '8px', fontSize: '12px' }}>
-                <div><strong>Origin:</strong> {detail.data.departure?.name || detail.data.departure?.iata || 'Unknown'}</div>
-                <div><strong>Destination:</strong> {detail.data.arrival?.name || detail.data.arrival?.iata || 'Unknown'}</div>
-              </div>
-            )}
-
             {detail.data?.aircraft && (
-              <div style={{ fontSize: '12px', color: '#475569', marginBottom: '6px' }}>
+              <div style={{ fontSize: '12px', color: '#475569', background: '#f8fafc', padding: '8px', borderRadius: '4px' }}>
                 <div><strong>Model:</strong> {detail.data.aircraft.manufacturer} {detail.data.aircraft.type || detail.data.aircraft.icaoType}</div>
                 {detail.data.aircraft.registration && <div><strong>Tail #:</strong> {detail.data.aircraft.registration}</div>}
                 {detail.data.aircraft.registeredOwner && <div><strong>Owner:</strong> {detail.data.aircraft.registeredOwner}</div>}

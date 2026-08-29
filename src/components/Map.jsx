@@ -381,36 +381,9 @@ export default function Map() {
 
       <SavedPlanesModal isOpen={showSaved} onClose={() => setShowSaved(false)} />
       
-      {/* Live Breadcrumb Trail for Selected Aircraft */}
+      {/* Live Flight Path Trail for Selected Aircraft */}
       {selectedBreadcrumbs.length > 1 && (
-        <Polyline positions={selectedBreadcrumbs} color="#2563eb" weight={4} opacity={0.8} dashArray="4, 6" />
-      )}
-
-      {/* Origin -> Aircraft -> Destination Route Line */}
-      {activeRoute.length > 1 && (
-        <Polyline positions={activeRoute} color="#dc2626" weight={3} opacity={0.6} dashArray="8, 8" />
-      )}
-
-      {/* Origin Airport Marker */}
-      {flightDetail?.departure?.latitude && (
-        <Marker position={[flightDetail.departure.latitude, flightDetail.departure.longitude]}>
-          <Popup>
-            <div>
-              <strong>Origin: {flightDetail.departure.name}</strong> ({flightDetail.departure.iata || flightDetail.departure.icao})
-            </div>
-          </Popup>
-        </Marker>
-      )}
-
-      {/* Destination Airport Marker */}
-      {flightDetail?.arrival?.latitude && (
-        <Marker position={[flightDetail.arrival.latitude, flightDetail.arrival.longitude]}>
-          <Popup>
-            <div>
-              <strong>Destination: {flightDetail.arrival.name}</strong> ({flightDetail.arrival.iata || flightDetail.arrival.icao})
-            </div>
-          </Popup>
-        </Marker>
+        <Polyline positions={selectedBreadcrumbs} color="#2563eb" weight={4} opacity={0.85} />
       )}
 
       {userPos && (
@@ -429,38 +402,30 @@ export default function Map() {
           }}
         >
           <Popup>
-            <div style={{ minWidth: '220px', lineHeight: '1.4' }}>
-              <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '4px' }}>
+            <div style={{ minWidth: '200px', lineHeight: '1.4' }}>
+              <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '2px' }}>
                 {f.flightNumber || f.icao24}
               </div>
 
               {selectedFlight?.id === f.id && flightDetail?.airline?.name && (
                 <div style={{ color: '#2563eb', fontWeight: 600, fontSize: '13px', marginBottom: '4px' }}>
-                  {flightDetail.airline.name}
+                  ✈️ {flightDetail.airline.name}
                 </div>
               )}
 
-              {/* Route Summary if Available */}
-              {selectedFlight?.id === f.id && (flightDetail?.departure || flightDetail?.arrival) && (
-                <div style={{ background: '#f1f5f9', padding: '6px 8px', borderRadius: '4px', margin: '6px 0', fontSize: '12px' }}>
-                  <div><strong>From:</strong> {flightDetail.departure?.name || flightDetail.departure?.iata || 'Unknown'}</div>
-                  <div><strong>To:</strong> {flightDetail.arrival?.name || flightDetail.arrival?.iata || 'Unknown'}</div>
-                </div>
-              )}
-
-              {/* Aircraft Model Details */}
+              {/* Aircraft Model & Tail Number Details */}
               {selectedFlight?.id === f.id && flightDetail?.aircraft && (
-                <div style={{ fontSize: '12px', color: '#475569', marginBottom: '4px' }}>
-                  <strong>Aircraft:</strong> {flightDetail.aircraft.manufacturer} {flightDetail.aircraft.type || flightDetail.aircraft.icaoType}
-                  {flightDetail.aircraft.registration && <span> ({flightDetail.aircraft.registration})</span>}
+                <div style={{ background: '#f8fafc', padding: '6px 8px', borderRadius: '4px', margin: '4px 0', fontSize: '12px', color: '#334155' }}>
+                  <div><strong>Model:</strong> {flightDetail.aircraft.manufacturer} {flightDetail.aircraft.type || flightDetail.aircraft.icaoType}</div>
+                  {flightDetail.aircraft.registration && <div><strong>Tail:</strong> {flightDetail.aircraft.registration}</div>}
                 </div>
               )}
 
-              <div style={{ fontSize: '12px', color: '#334155' }}>
+              <div style={{ fontSize: '12px', color: '#334155', marginTop: '4px' }}>
                 <div><strong>Alt:</strong> {typeof f.altitudeFeet === 'number' ? Math.round(f.altitudeFeet).toLocaleString() : 'N/A'} ft</div>
                 <div><strong>Speed:</strong> {typeof f.groundSpeedKts === 'number' ? Math.round(f.groundSpeedKts) : 'N/A'} kt</div>
                 <div><strong>Heading:</strong> {Math.round(f.trueHeadingDeg || 0)}°</div>
-                {f.isMilitary && <div style={{ color: '#dc2626', fontWeight: 'bold' }}>🎖️ Military Aircraft</div>}
+                {f.isMilitary && <div style={{ color: '#dc2626', fontWeight: 'bold', marginTop: '2px' }}>🎖️ Military Aircraft</div>}
               </div>
 
               <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
