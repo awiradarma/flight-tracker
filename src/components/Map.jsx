@@ -83,31 +83,26 @@ function throttle(fn, limit) {
   };
 }
 
-// Centralised track fetch logic (sets track state)
-const fetchTrack = async (icao24, setTrack) => {
+// Centralised detail fetch
+const fetchFlightDetail = async (flight, setDetail) => {
   try {
-    const r = await fetch(`/api/track?icao24=${icao24}`);
+    const r = await fetch(`/api/flightDetail?icao24=${flight.icao24}&callsign=${encodeURIComponent(flight.flightNumber || '')}`);
+    if (!r.ok) return;
     const data = await r.json();
-    if (!r.ok) {
-      console.error('Track fetch error', data.error || r.status);
-      return;
-    }
-    const coords = data.path ? data.path.map(p => [p[1], p[2]]) : [];
-    setTrack(coords);
+    setDetail(data);
   } catch (e) {
-    console.error('Track fetch exception', e);
+    console.error('Flight detail fetch exception', e);
   }
 };
-
-// Throttled version used in handlers
-const throttledFetchTrack = throttle(fetchTrack, 2000);
 
 export default function Map() {
   const [userPos, setUserPos] = useState(null);
   const [flights, setFlights] = useState([]);
   const [radius, setRadius] = useState(10); // nautical miles, will be updated from map bounds
   const [showSaved, setShowSaved] = useState(false);
-  const [track, setTrack] = useState([]); // live track coordinates
+  const [selectedFlight, setSelectedFlight] = useState(null);
+  const [flightDetail, setFlightDetail] = useState(null);
+  const [historyTracks, setHistoryTracks] = useState({}); // icao24 -> [[lat, lon], ...]
   const watchId = useRef(null);
 
   // -------------------------------------------------------------
@@ -115,26 +110,21 @@ export default function Map() {
   // -------------------------------------------------------------
   useEffect(() => {
     if (!navigator.geolocation) {
-      // No geolocation support – use fallback (San Francisco)
       setUserPos({ lat: 37.7749, lng: -122.4194 });
       return;
     }
-    // Get current position once to set initial location
     navigator.geolocation.getCurrentPosition(
       (pos) => setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
       (err) => {
         console.warn('Geolocation init error', err);
-        // Fallback only if we don't have a position yet
         setUserPos({ lat: 37.7749, lng: -122.4194 });
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
-    // Then watch for changes
     watchId.current = navigator.geolocation.watchPosition(
       (pos) => setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
       (err) => {
         console.warn('Geolocation watch error', err);
-        // Do not overwrite an existing valid position on watch errors
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
@@ -163,7 +153,21 @@ export default function Map() {
         const data = await res.json();
         if (Array.isArray(data)) {
           setFlights(data);
-          consecutiveErrors = 0; // reset on success
+          // Accumulate live breadcrumb trails for each aircraft
+          setHistoryTracks(prev => {
+            const next = { ...prev };
+            data.forEach(f => {
+              if (f.latitude && f.longitude) {
+                const existing = next[f.icao24] || [];
+                const last = existing[existing.length - 1];
+                if (!last || last[0] !== f.latitude || last[1] !== f.longitude) {
+                  next[f.icao24] = [...existing.slice(-40), [f.latitude, f.longitude]];
+                }
+              }
+            });
+            return next;
+          });
+          consecutiveErrors = 0;
         }
       } catch (e) {
         if (e && e.name !== 'AbortError') {
@@ -184,7 +188,7 @@ export default function Map() {
     scheduleNext();
 
     const handleVisibility = () => {
-      if (!document.hidden) fetchFlights(); // refresh when tab becomes visible
+      if (!document.hidden) fetchFlights();
     };
     document.addEventListener('visibilitychange', handleVisibility);
 
@@ -194,6 +198,29 @@ export default function Map() {
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [userPos, radius]);
+
+  const handlePlaneSelect = (f) => {
+    setSelectedFlight(f);
+    setFlightDetail(null);
+    fetchFlightDetail(f, setFlightDetail);
+  };
+
+  // Build route polyline points if departure and arrival coordinates exist
+  const activeRoute = [];
+  if (selectedFlight && flightDetail) {
+    if (flightDetail.departure?.latitude && flightDetail.departure?.longitude) {
+      activeRoute.push([flightDetail.departure.latitude, flightDetail.departure.longitude]);
+    }
+    if (selectedFlight.latitude && selectedFlight.longitude) {
+      activeRoute.push([selectedFlight.latitude, selectedFlight.longitude]);
+    }
+    if (flightDetail.arrival?.latitude && flightDetail.arrival?.longitude) {
+      activeRoute.push([flightDetail.arrival.latitude, flightDetail.arrival.longitude]);
+    }
+  }
+
+  // Active breadcrumb history for selected aircraft
+  const selectedBreadcrumbs = (selectedFlight && historyTracks[selectedFlight.icao24]) || [];
 
   // -------------------------------------------------------------
   // 3️⃣ Render map
@@ -213,48 +240,120 @@ export default function Map() {
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution="&copy; <a href='https://openstreetmap.org'>OpenStreetMap</a> contributors"
       />
-      {/* Saved planes button */}
-      <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000 }}>
-        <button onClick={() => setShowSaved(true)} style={{ padding: '6px 12px' }} aria-label="View saved planes">Saved Planes</button>
+      
+      {/* Top right control buttons */}
+      <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000, display: 'flex', gap: '8px' }}>
+        <button 
+          onClick={() => setShowSaved(true)} 
+          style={{ padding: '8px 14px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, boxShadow: '0 2px 6px rgba(0,0,0,0.3)' }}
+          aria-label="View saved planes"
+        >
+          ⭐ Saved Planes
+        </button>
       </div>
+
       <SavedPlanesModal isOpen={showSaved} onClose={() => setShowSaved(false)} />
-      {track.length > 0 && <Polyline positions={track} color="blue" />}
+      
+      {/* Live Breadcrumb Trail for Selected Aircraft */}
+      {selectedBreadcrumbs.length > 1 && (
+        <Polyline positions={selectedBreadcrumbs} color="#2563eb" weight={4} opacity={0.8} dashArray="4, 6" />
+      )}
+
+      {/* Origin -> Aircraft -> Destination Route Line */}
+      {activeRoute.length > 1 && (
+        <Polyline positions={activeRoute} color="#dc2626" weight={3} opacity={0.6} dashArray="8, 8" />
+      )}
+
+      {/* Origin Airport Marker */}
+      {flightDetail?.departure?.latitude && (
+        <Marker position={[flightDetail.departure.latitude, flightDetail.departure.longitude]}>
+          <Popup>
+            <div>
+              <strong>Origin: {flightDetail.departure.name}</strong> ({flightDetail.departure.iata || flightDetail.departure.icao})
+            </div>
+          </Popup>
+        </Marker>
+      )}
+
+      {/* Destination Airport Marker */}
+      {flightDetail?.arrival?.latitude && (
+        <Marker position={[flightDetail.arrival.latitude, flightDetail.arrival.longitude]}>
+          <Popup>
+            <div>
+              <strong>Destination: {flightDetail.arrival.name}</strong> ({flightDetail.arrival.iata || flightDetail.arrival.icao})
+            </div>
+          </Popup>
+        </Marker>
+      )}
+
       {userPos && (
         <Marker position={[userPos.lat, userPos.lng]}>
           <Popup>You are here</Popup>
         </Marker>
       )}
+
       {flights.map((f) => (
         <Marker
           key={f.id}
           position={[f.latitude, f.longitude]}
           icon={aircraftIcon(f.trueHeadingDeg)}
           eventHandlers={{
-            click: () => throttledFetchTrack(f.icao24, setTrack),
+            click: () => handlePlaneSelect(f),
           }}
         >
           <Popup>
-            <div>
-              <strong>{f.flightNumber || f.icao24}</strong>
-              <br />
-              Alt: {Math.round(f.altitudeFeet)} ft
-              <br />
-              Spd: {Math.round(f.groundSpeedKts)} kt
-              <br />
-              {f.isMilitary && <span style={{ color: 'red' }}>Military</span>}
-              <br />
-              <button onClick={(e) => {
-                e.stopPropagation();
-                const saved = JSON.parse(window.localStorage.getItem('savedPlanes') || '[]');
-                if (saved.some(s => s.icao24 === f.icao24)) return; // prevent duplicates
-                saved.push({ icao24: f.icao24, flightNumber: f.flightNumber || f.icao24, timestamp: Math.floor(Date.now() / 1000) });
-                window.localStorage.setItem('savedPlanes', JSON.stringify(saved));
-              }}>Save plane</button>
-              <br />
-              <button onClick={(e) => {
-                e.stopPropagation();
-                throttledFetchTrack(f.icao24, setTrack);
-              }}>Show live track</button>
+            <div style={{ minWidth: '220px', lineHeight: '1.4' }}>
+              <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '4px' }}>
+                {f.flightNumber || f.icao24}
+              </div>
+
+              {selectedFlight?.id === f.id && flightDetail?.airline?.name && (
+                <div style={{ color: '#2563eb', fontWeight: 600, fontSize: '13px', marginBottom: '4px' }}>
+                  {flightDetail.airline.name}
+                </div>
+              )}
+
+              {/* Route Summary if Available */}
+              {selectedFlight?.id === f.id && (flightDetail?.departure || flightDetail?.arrival) && (
+                <div style={{ background: '#f1f5f9', padding: '6px 8px', borderRadius: '4px', margin: '6px 0', fontSize: '12px' }}>
+                  <div><strong>From:</strong> {flightDetail.departure?.name || flightDetail.departure?.iata || 'Unknown'}</div>
+                  <div><strong>To:</strong> {flightDetail.arrival?.name || flightDetail.arrival?.iata || 'Unknown'}</div>
+                </div>
+              )}
+
+              {/* Aircraft Model Details */}
+              {selectedFlight?.id === f.id && flightDetail?.aircraft && (
+                <div style={{ fontSize: '12px', color: '#475569', marginBottom: '4px' }}>
+                  <strong>Aircraft:</strong> {flightDetail.aircraft.manufacturer} {flightDetail.aircraft.type || flightDetail.aircraft.icaoType}
+                  {flightDetail.aircraft.registration && <span> ({flightDetail.aircraft.registration})</span>}
+                </div>
+              )}
+
+              <div style={{ fontSize: '12px', color: '#334155' }}>
+                <div><strong>Alt:</strong> {typeof f.altitudeFeet === 'number' ? Math.round(f.altitudeFeet).toLocaleString() : 'N/A'} ft</div>
+                <div><strong>Speed:</strong> {typeof f.groundSpeedKts === 'number' ? Math.round(f.groundSpeedKts) : 'N/A'} kt</div>
+                <div><strong>Heading:</strong> {Math.round(f.trueHeadingDeg || 0)}°</div>
+                {f.isMilitary && <div style={{ color: '#dc2626', fontWeight: 'bold' }}>🎖️ Military Aircraft</div>}
+              </div>
+
+              <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
+                <button
+                  style={{ padding: '4px 8px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const saved = JSON.parse(window.localStorage.getItem('savedPlanes') || '[]');
+                    if (saved.some(s => s.icao24 === f.icao24)) return;
+                    saved.push({
+                      icao24: f.icao24,
+                      flightNumber: f.flightNumber || f.icao24,
+                      timestamp: Math.floor(Date.now() / 1000)
+                    });
+                    window.localStorage.setItem('savedPlanes', JSON.stringify(saved));
+                  }}
+                >
+                  ⭐ Save plane
+                </button>
+              </div>
             </div>
           </Popup>
         </Marker>
