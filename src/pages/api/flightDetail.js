@@ -1,27 +1,39 @@
-// pages/api/flightDetail.js
-// Using native fetch (Node 18+)
+export const config = {
+  runtime: 'edge',
+};
 
-/**
- * GET /api/flightDetail?icao24=XXXXXX&timestamp=UNIX_SECONDS
- * Returns detailed flight information (departure/arrival airports) for a saved aircraft.
- * Uses OpenSky "flights/aircraft" endpoint which provides estDepartureAirport and estArrivalAirport.
- */
-export default async function handler(req, res) {
+export default async function handler(req) {
   if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
-  const { icao24, timestamp } = req.query;
+  const urlObj = new URL(req.url);
+  const icao24 = urlObj.searchParams.get('icao24');
+  const timestamp = urlObj.searchParams.get('timestamp');
+
   if (!icao24 || !timestamp) {
-    return res.status(400).json({ error: 'Missing required query parameters icao24 and timestamp' });
+    return new Response(JSON.stringify({ error: 'Missing required query parameters icao24 and timestamp' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
   if (!/^[0-9a-f]{6}$/i.test(icao24)) {
-    return res.status(400).json({ error: 'Invalid icao24 format: must be 6-char hex string' });
+    return new Response(JSON.stringify({ error: 'Invalid icao24 format: must be 6-char hex string' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
   const ts = Number(timestamp);
   if (isNaN(ts)) {
-    return res.status(400).json({ error: 'Invalid timestamp' });
+    return new Response(JSON.stringify({ error: 'Invalid timestamp' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
+
   // Search a +-5 minute window around the supplied timestamp
   const begin = ts - 300;
   const end = ts + 300;
@@ -34,11 +46,17 @@ export default async function handler(req, res) {
     clearTimeout(timeoutId);
     if (!resp.ok) {
       console.error('OpenSky flight detail error', resp.status, await resp.text());
-      return res.status(502).json({ error: 'Failed to fetch flight details from OpenSky' });
+      return new Response(JSON.stringify({ error: 'Failed to fetch flight details from OpenSky' }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     const data = await resp.json();
     if (!Array.isArray(data) || data.length === 0) {
-      return res.status(404).json({ error: 'No flight record found for given parameters' });
+      return new Response(JSON.stringify({ error: 'No flight record found for given parameters' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     // OpenSky may return multiple records; pick the one closest to the timestamp
     const closest = data.reduce((best, cur) => {
@@ -62,9 +80,15 @@ export default async function handler(req, res) {
       firstSeen: closest.firstSeen,
       lastSeen: closest.lastSeen,
     };
-    return res.status(200).json(result);
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
   } catch (err) {
     console.error('Error fetching flight detail', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    return new Response(JSON.stringify({ error: 'Internal server error' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 }

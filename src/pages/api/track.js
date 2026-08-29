@@ -1,14 +1,6 @@
-// Using native fetch (Node 18+)
-
-/**
- * GET /api/track?icao24=XXXXXX
- * Returns the live track (path) for the given aircraft using OpenSky /tracks/all endpoint.
- * The response contains a `path` array where each entry is an array:
- * [time, latitude, longitude, baro_altitude, true_track, on_ground]
- *
- * Uses OAuth2 client‑credentials flow. Provide OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET
- * via environment variables. The token is cached in memory for its lifetime (default 30 min).
- */
+export const config = {
+  runtime: 'edge',
+};
 
 // In‑memory token cache
 let cachedToken = null; // { accessToken, expiresAt }
@@ -91,17 +83,28 @@ async function getTrack(icao24, accessToken) {
   return path;
 }
 
-export default async function handler(req, res) {
+export default async function handler(req) {
   if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
-  const { icao24 } = req.query;
+  const urlObj = new URL(req.url);
+  const icao24 = urlObj.searchParams.get('icao24');
+
   if (!icao24) {
-    return res.status(400).json({ error: 'Missing required icao24 parameter' });
+    return new Response(JSON.stringify({ error: 'Missing required icao24 parameter' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
   if (!/^[0-9a-f]{6}$/i.test(icao24)) {
-    return res.status(400).json({ error: 'Invalid icao24 format: must be 6-char hex string' });
+    return new Response(JSON.stringify({ error: 'Invalid icao24 format: must be 6-char hex string' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   let accessToken;
@@ -109,18 +112,30 @@ export default async function handler(req, res) {
     accessToken = await getAccessToken();
   } catch (e) {
     console.error('Token error', e);
-    return res.status(502).json({ error: 'Failed to obtain OpenSky access token' });
+    return new Response(JSON.stringify({ error: 'Failed to obtain OpenSky access token' }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   try {
     const path = await getTrack(icao24, accessToken);
-    return res.status(200).json({ icao24, path });
+    return new Response(JSON.stringify({ icao24, path }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
   } catch (err) {
     // If OpenSky returns 429 we simply forward it as a 502 for the client
     if (err.message.includes('429')) {
-      return res.status(502).json({ error: 'Rate limit exceeded' });
+      return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     console.error('Error fetching track', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    return new Response(JSON.stringify({ error: 'Internal server error' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 }

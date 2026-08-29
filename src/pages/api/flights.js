@@ -1,23 +1,37 @@
 import { FlightStatus } from '@/models/flight';
 
+export const config = {
+  runtime: 'edge',
+};
+
 // In‑memory cache for the most recent successful flight list
 let cachedFlights = [];
 
-export default async function handler(req, res) {
+export default async function handler(req) {
   if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   try {
-    const lat = parseFloat(req.query.lat);
-    const lon = parseFloat(req.query.lon);
-    const radius = parseFloat(req.query.radius ?? '10');
+    const urlObj = new URL(req.url);
+    const lat = parseFloat(urlObj.searchParams.get('lat'));
+    const lon = parseFloat(urlObj.searchParams.get('lon'));
+    const radius = parseFloat(urlObj.searchParams.get('radius') ?? '10');
 
     if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-      return res.status(400).json({ error: 'Invalid lat/lon: must be valid numbers within range' });
+      return new Response(JSON.stringify({ error: 'Invalid lat/lon: must be valid numbers within range' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     if (isNaN(radius) || radius <= 0 || radius > 500) {
-      return res.status(400).json({ error: 'Invalid radius: must be between 0 and 500 nautical miles' });
+      return new Response(JSON.stringify({ error: 'Invalid radius: must be between 0 and 500 nautical miles' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     // Convert radius (nautical miles) to a latitude/longitude bounding box.
@@ -78,7 +92,10 @@ export default async function handler(req, res) {
     if (!upstream || !upstream.ok) {
       if (cachedFlights.length > 0) {
         console.warn('OpenSky request failed – serving cached flights');
-        return res.status(200).json(cachedFlights);
+        return new Response(JSON.stringify(cachedFlights), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
       }
       console.warn('OpenSky request failed – returning fallback sample flight');
       const sampleFlights = [
@@ -98,7 +115,10 @@ export default async function handler(req, res) {
           status: FlightStatus.EnRoute,
         },
       ];
-      return res.status(200).json(sampleFlights);
+      return new Response(JSON.stringify(sampleFlights), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     const raw = await upstream.json();
@@ -123,12 +143,21 @@ export default async function handler(req, res) {
     // Update cache before responding
     cachedFlights = flights;
 
-    return res.status(200).json(flights);
+    return new Response(JSON.stringify(flights), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
   } catch (error) {
     console.error('Unhandled error in flights API:', error);
     if (cachedFlights.length > 0) {
-      return res.status(200).json(cachedFlights);
+      return new Response(JSON.stringify(cachedFlights), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
-    return res.status(500).json({ error: 'Failed to fetch flights' });
+    return new Response(JSON.stringify({ error: 'Failed to fetch flights' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 }
