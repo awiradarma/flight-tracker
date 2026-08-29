@@ -23,13 +23,19 @@ export default async function handler(req, res) {
 
   const url = `https://opensky-network.org/api/states/all?lamin=${latMin}&lamax=${latMax}&lomin=${lonMin}&lomax=${lonMax}`;
 
-  // Fetch with retry on rate limit (429)
-  let upstream = await fetch(url);
+  // Use a longer timeout (30 s) for the OpenSky request – Vercel may need more time
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  let upstream = await fetch(url, { signal: controller.signal });
+  clearTimeout(timeoutId);
   console.log('OpenSky response status:', upstream.status);
   if (upstream.status === 429) {
     console.warn('OpenSky rate‑limit hit – retrying after 3 s');
     await new Promise(r => setTimeout(r, 3000));
-    upstream = await fetch(url);
+    const retryController = new AbortController();
+    const retryTimeout = setTimeout(() => retryController.abort(), 30000);
+    upstream = await fetch(url, { signal: retryController.signal });
+    clearTimeout(retryTimeout);
     console.log('Retry response status:', upstream.status);
   }
   if (!upstream.ok) {
