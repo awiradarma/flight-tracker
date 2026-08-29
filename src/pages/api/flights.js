@@ -23,59 +23,48 @@ export default async function handler(req, res) {
 
   const url = `https://opensky-network.org/api/states/all?lamin=${latMin}&lamax=${latMax}&lomin=${lonMin}&lomax=${lonMax}`;
 
-      const fetchOptions = {
-+      headers: {
-+        // OpenSky requires a non‑default User‑Agent string
-+        'User-Agent': 'flight-tracker/1.0 (+https://github.com/awiradarma/flight-tracker)'
-+      },
-+      signal: controller.signal,
-+    };
-+    // Try direct fetch first; if it fails (e.g., Vercel blocked), fall back to a public proxy
-+    let upstream;
-+    try {
-    // Helper to fetch from OpenSky with timeout, User-Agent, and proxy fallback
-    async function fetchOpenSky(requestUrl) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-      const fetchOpts = {
-        headers: {
-          // OpenSky requires a non‑default User‑Agent string
-          'User-Agent': 'flight-tracker/1.0 (+https://github.com/awiradarma/flight-tracker)',
-        },
-        signal: controller.signal,
-      };
+  // Helper to fetch from OpenSky with timeout, User-Agent, and proxy fallback
+  async function fetchOpenSky(requestUrl) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const fetchOpts = {
+      headers: {
+        'User-Agent': 'flight-tracker/1.0 (+https://github.com/awiradarma/flight-tracker)'
+      },
+      signal: controller.signal,
+    };
+    try {
+      const resp = await fetch(requestUrl, fetchOpts);
+      clearTimeout(timeoutId);
+      return resp;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      console.warn('Direct fetch to OpenSky failed, falling back to proxy:', err);
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(requestUrl)}`;
+      const proxyCtrl = new AbortController();
+      const proxyTimeout = setTimeout(() => proxyCtrl.abort(), 30000);
       try {
-        const resp = await fetch(requestUrl, fetchOpts);
-        clearTimeout(timeoutId);
-        return resp;
-      } catch (err) {
-        clearTimeout(timeoutId);
-        console.warn('Direct fetch to OpenSky failed, falling back to proxy:', err);
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(requestUrl)}`;
-        const proxyCtrl = new AbortController();
-        const proxyTimeout = setTimeout(() => proxyCtrl.abort(), 30000);
-        try {
-          const proxyResp = await fetch(proxyUrl, { ...fetchOpts, signal: proxyCtrl.signal });
-          clearTimeout(proxyTimeout);
-          return proxyResp;
-        } catch (proxyErr) {
-          clearTimeout(proxyTimeout);
-          console.error('Proxy fetch also failed:', proxyErr);
-          throw proxyErr;
-        }
+        const proxyResp = await fetch(proxyUrl, { ...fetchOpts, signal: proxyCtrl.signal });
+        clearTimeout(proxyTimeout);
+        return proxyResp;
+      } catch (proxyErr) {
+        clearTimeout(proxyTimeout);
+        console.error('Proxy fetch also failed:', proxyErr);
+        throw proxyErr;
       }
     }
+  }
 
-    // Initial request
-    let upstream = await fetchOpenSky(url);
-    console.log('OpenSky response status:', upstream.status);
-    // Simple retry on rate‑limit
-    if (upstream.status === 429) {
-      console.warn('OpenSky rate‑limit hit – retrying after 3 s');
-      await new Promise(r => setTimeout(r, 3000));
-      upstream = await fetchOpenSky(url);
-      console.log('Retry response status:', upstream.status);
-    }
+  // Initial request
+  let upstream = await fetchOpenSky(url);
+  console.log('OpenSky response status:', upstream.status);
+  // Simple retry on rate‑limit
+  if (upstream.status === 429) {
+    console.warn('OpenSky rate‑limit hit – retrying after 3 s');
+    await new Promise(r => setTimeout(r, 3000));
+    upstream = await fetchOpenSky(url);
+    console.log('Retry response status:', upstream.status);
+  }
 
   if (!upstream.ok) {
     // If OpenSky still fails (rate limit or other), return sample data to keep UI functional
