@@ -136,6 +136,7 @@ export default function FlightMap() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
   const [savedPlanes, setSavedPlanes] = useState([]);
+  const [refreshIntervalSec, setRefreshIntervalSec] = useState(5); // default 5 seconds
   const watchId = useRef(null);
 
   // Load saved planes from localStorage on mount
@@ -249,7 +250,7 @@ export default function FlightMap() {
   }, []);
 
   // -------------------------------------------------------------
-  // 2️⃣ Fetch flights around active mapCenter with backoff
+  // 2️⃣ Fetch flights around active mapCenter with configurable rate
   // -------------------------------------------------------------
   const activeCenter = mapCenter || userPos;
 
@@ -310,8 +311,9 @@ export default function FlightMap() {
     };
 
     fetchFlights();
-    // Base interval 12s, with exponential backoff on errors (max 60s)
-    const getInterval = () => Math.min(12000 * Math.pow(2, consecutiveErrors), 60000);
+    // Configurable interval (base ms * error backoff)
+    const baseIntervalMs = refreshIntervalSec * 1000;
+    const getInterval = () => Math.min(baseIntervalMs * Math.pow(2, consecutiveErrors), 60000);
     const scheduleNext = () => {
       timeoutId = setTimeout(() => {
         fetchFlights().then(scheduleNext);
@@ -329,7 +331,7 @@ export default function FlightMap() {
       if (timeoutId) clearTimeout(timeoutId);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [userPos, radius]);
+  }, [activeCenter, radius, refreshIntervalSec]);
 
   const handlePlaneSelect = (f) => {
     setSelectedFlight(f);
@@ -526,6 +528,28 @@ export default function FlightMap() {
                 >
                   🛩️ Private ({privateCount})
                 </button>
+              </div>
+
+              {/* 4. Refresh Rate Slider */}
+              <div style={{ background: '#f8fafc', padding: '6px 8px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#475569', marginBottom: '2px', fontWeight: 600 }}>
+                  <span>⚡ Refresh Rate</span>
+                  <span style={{ color: '#1e3a5f' }}>Every {refreshIntervalSec}s</span>
+                </div>
+                <input
+                  type="range"
+                  min="3"
+                  max="30"
+                  step="1"
+                  value={refreshIntervalSec}
+                  onChange={(e) => setRefreshIntervalSec(Number(e.target.value))}
+                  style={{ width: '100%', height: '4px', cursor: 'pointer' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: '#94a3b8' }}>
+                  <span>3s (Fast)</span>
+                  <span>10s</span>
+                  <span>30s (Battery Saver)</span>
+                </div>
               </div>
             </div>
           )}
