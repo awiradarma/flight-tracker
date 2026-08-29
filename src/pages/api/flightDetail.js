@@ -1,5 +1,5 @@
 // pages/api/flightDetail.js
-import fetch from 'node-fetch';
+// Using native fetch (Node 18+)
 
 /**
  * GET /api/flightDetail?icao24=XXXXXX&timestamp=UNIX_SECONDS
