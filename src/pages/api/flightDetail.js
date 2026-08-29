@@ -16,6 +16,8 @@ export default async function handler(req) {
   const urlObj = new URL(req.url);
   const icao24 = (urlObj.searchParams.get('icao24') || '').toLowerCase().trim();
   const callsign = (urlObj.searchParams.get('callsign') || '').trim();
+  const planeLat = parseFloat(urlObj.searchParams.get('lat') || '');
+  const planeLon = parseFloat(urlObj.searchParams.get('lon') || '');
 
   if (!icao24 && !callsign) {
     return new Response(JSON.stringify({ error: 'icao24 or callsign parameter required' }), {
@@ -38,6 +40,15 @@ export default async function handler(req) {
   let routeInfo = null;
   let aircraftInfo = null;
 
+  // Helper: Haversine distance in km
+  function getDistanceKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
   // 1. Fetch flight route & airline info if callsign is available
   if (callsign) {
     try {
@@ -51,8 +62,30 @@ export default async function handler(req) {
       clearTimeout(routeTimeout);
       if (routeResp.ok) {
         const routeData = await routeResp.json();
-        if (routeData?.response?.flightroute) {
-          routeInfo = routeData.response.flightroute;
+        const candidateRoute = routeData?.response?.flightroute;
+        if (candidateRoute) {
+          // Verify geographical plausibility if plane coordinates are provided
+          if (!isNaN(planeLat) && !isNaN(planeLon) && candidateRoute.origin?.latitude && candidateRoute.destination?.latitude) {
+            const oLat = candidateRoute.origin.latitude;
+            const oLon = candidateRoute.origin.longitude;
+            const dLat = candidateRoute.destination.latitude;
+            const dLon = candidateRoute.destination.longitude;
+
+            const distOriginDest = getDistanceKm(oLat, oLon, dLat, dLon);
+            const distToOrigin = getDistanceKm(planeLat, planeLon, oLat, oLon);
+            const distToDest = getDistanceKm(planeLat, planeLon, dLat, dLon);
+            const detour = (distToOrigin + distToDest) - distOriginDest;
+
+            // If plane is within reasonable corridor of this route (detour <= 600km or close to either airport)
+            if (detour <= 600 || distToOrigin <= 400 || distToDest <= 400) {
+              routeInfo = candidateRoute;
+            } else {
+              // Still preserve the airline name, but don't show the mismatched schedule route
+              routeInfo = { airline: candidateRoute.airline };
+            }
+          } else {
+            routeInfo = candidateRoute;
+          }
         }
       }
     } catch (e) {

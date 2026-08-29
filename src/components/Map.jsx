@@ -86,7 +86,9 @@ function throttle(fn, limit) {
 // Centralised detail fetch
 const fetchFlightDetail = async (flight, setDetail) => {
   try {
-    const r = await fetch(`/api/flightDetail?icao24=${flight.icao24}&callsign=${encodeURIComponent(flight.flightNumber || '')}`);
+    const latParam = flight.latitude !== undefined ? `&lat=${flight.latitude}` : '';
+    const lonParam = flight.longitude !== undefined ? `&lon=${flight.longitude}` : '';
+    const r = await fetch(`/api/flightDetail?icao24=${flight.icao24}&callsign=${encodeURIComponent(flight.flightNumber || '')}${latParam}${lonParam}`);
     if (!r.ok) return;
     const data = await r.json();
     setDetail(data);
@@ -105,6 +107,7 @@ export default function Map() {
   const [historyTracks, setHistoryTracks] = useState({}); // icao24 -> [[lat, lon], ...]
   const [filterType, setFilterType] = useState('all'); // 'all' | 'commercial' | 'military' | 'private'
   const [searchQuery, setSearchQuery] = useState('');
+  const [isFilterExpanded, setIsFilterExpanded] = useState(false);
   const watchId = useRef(null);
 
   // -------------------------------------------------------------
@@ -268,90 +271,110 @@ export default function Map() {
       />
       
       {/* Top Floating Control Bar (Search, Category Filters, Saved Planes) */}
-      <div style={{ position: 'absolute', top: 12, left: 12, right: 12, zIndex: 1000, display: 'flex', justifyContent: 'space-between', alignItems: 'center', pointerEvents: 'none', flexWrap: 'wrap', gap: '8px' }}>
-        {/* Left Side: Filter Chips & Search Bar */}
-        <div style={{ display: 'flex', gap: '6px', pointerEvents: 'auto', background: 'rgba(255, 255, 255, 0.95)', padding: '6px 10px', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', flexWrap: 'wrap', alignItems: 'center' }}>
-          <input
-            type="text"
-            placeholder="🔍 Search flight / tail / model..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ padding: '6px 10px', fontSize: '12px', border: '1px solid #cbd5e1', borderRadius: '6px', outline: 'none', width: '180px' }}
-          />
-
-          <button
-            onClick={() => setFilterType('all')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 600,
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-              background: filterType === 'all' ? '#1e3a5f' : '#f1f5f9',
-              color: filterType === 'all' ? '#ffffff' : '#334155',
-            }}
+      <div style={{ position: 'absolute', top: 10, left: 10, right: 10, zIndex: 1000, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', pointerEvents: 'none', gap: '8px' }}>
+        {/* Left Side: Collapsible Filter / Search Pill */}
+        <div style={{ pointerEvents: 'auto', background: 'rgba(255, 255, 255, 0.96)', borderRadius: '10px', boxShadow: '0 4px 14px rgba(0,0,0,0.18)', maxWidth: 'calc(100vw - 120px)', backdropFilter: 'blur(8px)', overflow: 'hidden' }}>
+          {/* Header Row: Current active filter tag + Toggle button */}
+          <div 
+            onClick={() => setIsFilterExpanded(!isFilterExpanded)}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', cursor: 'pointer', userSelect: 'none' }}
           >
-            All ({flights.length})
-          </button>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e3a5f' }}>
+              🔍 {filterType === 'all' ? `All (${flights.length})` : filterType === 'commercial' ? `✈️ Commercial (${commercialCount})` : filterType === 'military' ? `🎖️ Military (${militaryCount})` : `🛩️ Private (${privateCount})`}
+            </span>
+            <span style={{ fontSize: '11px', color: '#64748b', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px' }}>
+              {isFilterExpanded ? '▲ Hide' : '▼ Filter'}
+            </span>
+          </div>
 
-          <button
-            onClick={() => setFilterType('commercial')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 600,
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-              background: filterType === 'commercial' ? '#2563eb' : '#f1f5f9',
-              color: filterType === 'commercial' ? '#ffffff' : '#334155',
-            }}
-          >
-            ✈️ Commercial ({commercialCount})
-          </button>
+          {/* Expanded Drawer: Search Input & Category Filters */}
+          {isFilterExpanded && (
+            <div style={{ padding: '8px 10px 10px 10px', borderTop: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <input
+                type="text"
+                placeholder="Search flight / tail / type..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{ padding: '6px 8px', fontSize: '12px', border: '1px solid #cbd5e1', borderRadius: '6px', outline: 'none', width: '100%', boxSizing: 'border-box' }}
+              />
 
-          <button
-            onClick={() => setFilterType('military')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 600,
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-              background: filterType === 'military' ? '#dc2626' : '#f1f5f9',
-              color: filterType === 'military' ? '#ffffff' : '#334155',
-            }}
-          >
-            🎖️ Military ({militaryCount})
-          </button>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                <button
+                  onClick={() => setFilterType('all')}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: filterType === 'all' ? '#1e3a5f' : '#f1f5f9',
+                    color: filterType === 'all' ? '#ffffff' : '#334155',
+                  }}
+                >
+                  All ({flights.length})
+                </button>
 
-          <button
-            onClick={() => setFilterType('private')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 600,
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-              background: filterType === 'private' ? '#0d9488' : '#f1f5f9',
-              color: filterType === 'private' ? '#ffffff' : '#334155',
-            }}
-          >
-            🛩️ Private / GA ({privateCount})
-          </button>
+                <button
+                  onClick={() => setFilterType('commercial')}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: filterType === 'commercial' ? '#2563eb' : '#f1f5f9',
+                    color: filterType === 'commercial' ? '#ffffff' : '#334155',
+                  }}
+                >
+                  ✈️ Commercial ({commercialCount})
+                </button>
+
+                <button
+                  onClick={() => setFilterType('military')}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: filterType === 'military' ? '#dc2626' : '#f1f5f9',
+                    color: filterType === 'military' ? '#ffffff' : '#334155',
+                  }}
+                >
+                  🎖️ Military ({militaryCount})
+                </button>
+
+                <button
+                  onClick={() => setFilterType('private')}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: filterType === 'private' ? '#0d9488' : '#f1f5f9',
+                    color: filterType === 'private' ? '#ffffff' : '#334155',
+                  }}
+                >
+                  🛩️ Private ({privateCount})
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right Side: Saved Planes */}
         <div style={{ pointerEvents: 'auto' }}>
           <button 
             onClick={() => setShowSaved(true)} 
-            style={{ padding: '8px 14px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', fontSize: '13px' }}
+            style={{ padding: '6px 12px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', fontSize: '12px', whiteSpace: 'nowrap' }}
             aria-label="View saved planes"
           >
-            ⭐ Saved Planes
+            ⭐ Saved ({JSON.parse(typeof window !== 'undefined' ? window.localStorage?.getItem('savedPlanes') || '[]' : '[]').length})
           </button>
         </div>
       </div>
