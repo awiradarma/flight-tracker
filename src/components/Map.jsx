@@ -103,6 +103,8 @@ export default function Map() {
   const [selectedFlight, setSelectedFlight] = useState(null);
   const [flightDetail, setFlightDetail] = useState(null);
   const [historyTracks, setHistoryTracks] = useState({}); // icao24 -> [[lat, lon], ...]
+  const [filterType, setFilterType] = useState('all'); // 'all' | 'commercial' | 'military' | 'private'
+  const [searchQuery, setSearchQuery] = useState('');
   const watchId = useRef(null);
 
   // -------------------------------------------------------------
@@ -222,6 +224,30 @@ export default function Map() {
   // Active breadcrumb history for selected aircraft
   const selectedBreadcrumbs = (selectedFlight && historyTracks[selectedFlight.icao24]) || [];
 
+  // Filter flights by category & search query
+  const displayedFlights = flights.filter(f => {
+    // 1. Category Filter
+    if (filterType === 'military' && !f.isMilitary) return false;
+    if (filterType === 'commercial' && f.category !== 'commercial') return false;
+    if (filterType === 'private' && f.category !== 'private') return false;
+
+    // 2. Search Query Filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const matchNumber = (f.flightNumber || '').toLowerCase().includes(q);
+      const matchHex = (f.icao24 || '').toLowerCase().includes(q);
+      const matchType = (f.aircraftType || '').toLowerCase().includes(q);
+      const matchReg = (f.registration || '').toLowerCase().includes(q);
+      if (!matchNumber && !matchHex && !matchType && !matchReg) return false;
+    }
+
+    return true;
+  });
+
+  const militaryCount = flights.filter(f => f.isMilitary).length;
+  const commercialCount = flights.filter(f => f.category === 'commercial').length;
+  const privateCount = flights.filter(f => f.category === 'private').length;
+
   // -------------------------------------------------------------
   // 3️⃣ Render map
   // -------------------------------------------------------------
@@ -241,15 +267,93 @@ export default function Map() {
         attribution="&copy; <a href='https://openstreetmap.org'>OpenStreetMap</a> contributors"
       />
       
-      {/* Top right control buttons */}
-      <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000, display: 'flex', gap: '8px' }}>
-        <button 
-          onClick={() => setShowSaved(true)} 
-          style={{ padding: '8px 14px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, boxShadow: '0 2px 6px rgba(0,0,0,0.3)' }}
-          aria-label="View saved planes"
-        >
-          ⭐ Saved Planes
-        </button>
+      {/* Top Floating Control Bar (Search, Category Filters, Saved Planes) */}
+      <div style={{ position: 'absolute', top: 12, left: 12, right: 12, zIndex: 1000, display: 'flex', justifyContent: 'space-between', alignItems: 'center', pointerEvents: 'none', flexWrap: 'wrap', gap: '8px' }}>
+        {/* Left Side: Filter Chips & Search Bar */}
+        <div style={{ display: 'flex', gap: '6px', pointerEvents: 'auto', background: 'rgba(255, 255, 255, 0.95)', padding: '6px 10px', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="🔍 Search flight / tail / model..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{ padding: '6px 10px', fontSize: '12px', border: '1px solid #cbd5e1', borderRadius: '6px', outline: 'none', width: '180px' }}
+          />
+
+          <button
+            onClick={() => setFilterType('all')}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: 600,
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: filterType === 'all' ? '#1e3a5f' : '#f1f5f9',
+              color: filterType === 'all' ? '#ffffff' : '#334155',
+            }}
+          >
+            All ({flights.length})
+          </button>
+
+          <button
+            onClick={() => setFilterType('commercial')}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: 600,
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: filterType === 'commercial' ? '#2563eb' : '#f1f5f9',
+              color: filterType === 'commercial' ? '#ffffff' : '#334155',
+            }}
+          >
+            ✈️ Commercial ({commercialCount})
+          </button>
+
+          <button
+            onClick={() => setFilterType('military')}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: 600,
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: filterType === 'military' ? '#dc2626' : '#f1f5f9',
+              color: filterType === 'military' ? '#ffffff' : '#334155',
+            }}
+          >
+            🎖️ Military ({militaryCount})
+          </button>
+
+          <button
+            onClick={() => setFilterType('private')}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: 600,
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: filterType === 'private' ? '#0d9488' : '#f1f5f9',
+              color: filterType === 'private' ? '#ffffff' : '#334155',
+            }}
+          >
+            🛩️ Private / GA ({privateCount})
+          </button>
+        </div>
+
+        {/* Right Side: Saved Planes */}
+        <div style={{ pointerEvents: 'auto' }}>
+          <button 
+            onClick={() => setShowSaved(true)} 
+            style={{ padding: '8px 14px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', fontSize: '13px' }}
+            aria-label="View saved planes"
+          >
+            ⭐ Saved Planes
+          </button>
+        </div>
       </div>
 
       <SavedPlanesModal isOpen={showSaved} onClose={() => setShowSaved(false)} />
@@ -292,7 +396,7 @@ export default function Map() {
         </Marker>
       )}
 
-      {flights.map((f) => (
+      {displayedFlights.map((f) => (
         <Marker
           key={f.id}
           position={[f.latitude, f.longitude]}

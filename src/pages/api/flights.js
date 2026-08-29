@@ -53,22 +53,34 @@ export default async function handler(req) {
         const rawList = adsbData.ac || [];
         const flights = rawList
           .filter(ac => ac.lat !== undefined && ac.lon !== undefined)
-          .map(ac => ({
-            id: ac.hex,
-            flightNumber: (ac.flight || ac.r || ac.hex || '').trim(),
-            airlineCode: '',
-            icao24: ac.hex,
-            aircraftType: ac.t || '',
-            departure: { iata: '' },
-            arrival: { iata: '' },
-            latitude: ac.lat,
-            longitude: ac.lon,
-            altitudeFeet: typeof ac.alt_baro === 'number' ? ac.alt_baro : (typeof ac.alt_geom === 'number' ? ac.alt_geom : undefined),
-            groundSpeedKts: typeof ac.gs === 'number' ? ac.gs : undefined,
-            trueHeadingDeg: typeof ac.track === 'number' ? ac.track : 0,
-            isMilitary: Boolean((ac.dbFlags || 0) & 1),
-            status: 'EnRoute',
-          }));
+          .map(ac => {
+            const flight = (ac.flight || '').trim();
+            const reg = (ac.r || '').trim();
+            const isMil = Boolean((ac.dbFlags || 0) & 1);
+            const isComm = Boolean(!isMil && flight && !flight.startsWith('N') && /^[A-Z]{2,4}\d+/.test(flight));
+            let category = 'private';
+            if (isMil) category = 'military';
+            else if (isComm) category = 'commercial';
+
+            return {
+              id: ac.hex,
+              flightNumber: flight || reg || ac.hex,
+              registration: reg,
+              airlineCode: '',
+              icao24: ac.hex,
+              aircraftType: ac.t || '',
+              category, // 'military' | 'commercial' | 'private'
+              departure: { iata: '' },
+              arrival: { iata: '' },
+              latitude: ac.lat,
+              longitude: ac.lon,
+              altitudeFeet: typeof ac.alt_baro === 'number' ? ac.alt_baro : (typeof ac.alt_geom === 'number' ? ac.alt_geom : undefined),
+              groundSpeedKts: typeof ac.gs === 'number' ? ac.gs : undefined,
+              trueHeadingDeg: typeof ac.track === 'number' ? ac.track : 0,
+              isMilitary: isMil,
+              status: 'EnRoute',
+            };
+          });
 
         cachedFlights = flights;
         return new Response(JSON.stringify(flights), {
