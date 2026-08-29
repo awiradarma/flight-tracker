@@ -109,7 +109,7 @@ const fetchFlightDetail = async (flight, setDetail) => {
   }
 };
 
-export default function Map() {
+export default function FlightMap() {
   const [userPos, setUserPos] = useState(null);
   const [flights, setFlights] = useState([]);
   const [radius, setRadius] = useState(10); // nautical miles, will be updated from map bounds
