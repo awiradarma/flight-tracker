@@ -1,5 +1,3 @@
-import { FlightStatus } from '@/models/flight';
-
 export const config = {
   runtime: 'edge',
 };
@@ -34,116 +32,139 @@ export default async function handler(req) {
       });
     }
 
-    // Convert radius (nautical miles) to a latitude/longitude bounding box.
+    const radiusNm = Math.min(Math.round(radius), 250);
+
+    // Primary: Query adsb.lol (unfiltered community ADS-B, 100% cloud-friendly, zero rate-limit blocks)
+    try {
+      const adsbUrl = `https://api.adsb.lol/v2/point/${lat}/${lon}/${radiusNm}`;
+      const adsbController = new AbortController();
+      const adsbTimeout = setTimeout(() => adsbController.abort(), 6000);
+
+      const adsbResp = await fetch(adsbUrl, {
+        headers: {
+          'User-Agent': 'flight-tracker/1.0 (https://github.com/awiradarma/flight-tracker)'
+        },
+        signal: adsbController.signal
+      });
+      clearTimeout(adsbTimeout);
+
+      if (adsbResp.ok) {
+        const adsbData = await adsbResp.json();
+        const rawList = adsbData.ac || [];
+        const flights = rawList
+          .filter(ac => ac.lat !== undefined && ac.lon !== undefined)
+          .map(ac => ({
+            id: ac.hex,
+            flightNumber: (ac.flight || ac.r || ac.hex || '').trim(),
+            airlineCode: '',
+            icao24: ac.hex,
+            aircraftType: ac.t || '',
+            departure: { iata: '' },
+            arrival: { iata: '' },
+            latitude: ac.lat,
+            longitude: ac.lon,
+            altitudeFeet: typeof ac.alt_baro === 'number' ? ac.alt_baro : (typeof ac.alt_geom === 'number' ? ac.alt_geom : undefined),
+            groundSpeedKts: typeof ac.gs === 'number' ? ac.gs : undefined,
+            trueHeadingDeg: typeof ac.track === 'number' ? ac.track : 0,
+            isMilitary: Boolean((ac.dbFlags || 0) & 1),
+            status: 'EnRoute',
+          }));
+
+        cachedFlights = flights;
+        return new Response(JSON.stringify(flights), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store, max-age=0'
+          },
+        });
+      }
+    } catch (adsbErr) {
+      console.warn('adsb.lol query failed, attempting OpenSky fallback:', adsbErr.message);
+    }
+
+    // Secondary Fallback: OpenSky Network
     const kmRadius = radius * 1.852;
-    const degRadius = kmRadius / 111; // approx degrees latitude per km
+    const degRadius = kmRadius / 111;
     const latMin = lat - degRadius;
     const latMax = lat + degRadius;
     const lonMin = lon - degRadius;
     const lonMax = lon + degRadius;
 
-    const url = `https://opensky-network.org/api/states/all?lamin=${latMin}&lamax=${latMax}&lomin=${lonMin}&lomax=${lonMax}`;
-
-    const headers = {
+    const openSkyUrl = `https://opensky-network.org/api/states/all?lamin=${latMin}&lamax=${latMax}&lomin=${lonMin}&lomax=${lonMax}`;
+    const openSkyHeaders = {
       'User-Agent': 'flight-tracker/1.0 (+https://github.com/awiradarma/flight-tracker)'
     };
-
     if (process.env.OPENSKY_CLIENT_ID && process.env.OPENSKY_CLIENT_SECRET) {
-      headers['Authorization'] = 'Basic ' + Buffer.from(
+      openSkyHeaders['Authorization'] = 'Basic ' + Buffer.from(
         `${process.env.OPENSKY_CLIENT_ID}:${process.env.OPENSKY_CLIENT_SECRET}`
       ).toString('base64');
     }
 
-    // Helper to fetch from OpenSky with timeout and User-Agent
-    async function fetchOpenSky(requestUrl) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      try {
-        const resp = await fetch(requestUrl, {
-          headers,
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        return resp;
-      } catch (err) {
-        clearTimeout(timeoutId);
-        throw err;
-      }
-    }
-
-    let upstream;
     try {
-      upstream = await fetchOpenSky(url);
-    } catch (err) {
-      console.warn('OpenSky direct fetch error/timeout:', err.message);
-    }
+      const osController = new AbortController();
+      const osTimeout = setTimeout(() => osController.abort(), 6000);
+      const osResp = await fetch(openSkyUrl, {
+        headers: openSkyHeaders,
+        signal: osController.signal,
+      });
+      clearTimeout(osTimeout);
 
-    // Simple retry on rate‑limit if we got a 429
-    if (upstream && upstream.status === 429) {
-      console.warn('OpenSky rate‑limit hit – retrying after 2 s');
-      await new Promise(r => setTimeout(r, 2000));
-      try {
-        upstream = await fetchOpenSky(url);
-      } catch (err) {
-        console.warn('OpenSky retry fetch error:', err.message);
-      }
-    }
+      if (osResp.ok) {
+        const raw = await osResp.json();
+        const flightList = raw.states || [];
+        const flights = flightList.map(item => ({
+          id: item[0],
+          flightNumber: (item[1] ?? '').trim(),
+          airlineCode: '',
+          icao24: item[0],
+          departure: { iata: '' },
+          arrival: { iata: '' },
+          latitude: item[6],
+          longitude: item[5],
+          altitudeFeet: item[7] ? item[7] * 3.28084 : undefined,
+          groundSpeedKts: item[9] ? item[9] * 1.94384 : undefined,
+          trueHeadingDeg: item[10],
+          isMilitary: false,
+          status: 'EnRoute',
+        }));
 
-    if (!upstream || !upstream.ok) {
-      if (cachedFlights.length > 0) {
-        console.warn('OpenSky request failed – serving cached flights');
-        return new Response(JSON.stringify(cachedFlights), {
+        cachedFlights = flights;
+        return new Response(JSON.stringify(flights), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      console.warn('OpenSky request failed – returning fallback sample flight');
-      const sampleFlights = [
-        {
-          id: 'sample1',
-          flightNumber: 'DEMO123',
-          airlineCode: '',
-          icao24: 'sample1',
-          departure: { iata: '' },
-          arrival: { iata: '' },
-          latitude: latMin + (latMax - latMin) / 2,
-          longitude: lonMin + (lonMax - lonMin) / 2,
-          altitudeFeet: 30000,
-          groundSpeedKts: 450,
-          trueHeadingDeg: 90,
-          isMilitary: false,
-          status: FlightStatus.EnRoute,
-        },
-      ];
-      return new Response(JSON.stringify(sampleFlights), {
+    } catch (osErr) {
+      console.warn('OpenSky fallback failed:', osErr.message);
+    }
+
+    if (cachedFlights.length > 0) {
+      return new Response(JSON.stringify(cachedFlights), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }
 
-    const raw = await upstream.json();
-    const flightList = raw.states ?? [];
-
-    const flights = flightList.map(item => ({
-      id: item[0], // icao24
-      flightNumber: (item[1] ?? '').trim(),
-      airlineCode: '',
-      icao24: item[0],
-      departure: { iata: '' },
-      arrival: { iata: '' },
-      latitude: item[6],
-      longitude: item[5],
-      altitudeFeet: item[7] ? item[7] * 3.28084 : undefined,
-      groundSpeedKts: item[9] ? item[9] * 1.94384 : undefined,
-      trueHeadingDeg: item[10],
-      isMilitary: false,
-      status: FlightStatus.EnRoute,
-    }));
-
-    // Update cache before responding
-    cachedFlights = flights;
-
-    return new Response(JSON.stringify(flights), {
+    // Default sample flight if completely offline
+    const sampleFlights = [
+      {
+        id: 'sample1',
+        flightNumber: 'DEMO123',
+        airlineCode: '',
+        icao24: 'sample1',
+        departure: { iata: '' },
+        arrival: { iata: '' },
+        latitude: latMin + (latMax - latMin) / 2,
+        longitude: lonMin + (lonMax - lonMin) / 2,
+        altitudeFeet: 30000,
+        groundSpeedKts: 450,
+        trueHeadingDeg: 90,
+        isMilitary: false,
+        status: 'EnRoute',
+      },
+    ];
+    return new Response(JSON.stringify(sampleFlights), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });

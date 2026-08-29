@@ -152,62 +152,19 @@ export default function Map() {
     let timeoutId = null;
     let consecutiveErrors = 0;
 
-    const fetchDirectOpenSky = async (lat, lon, radNm, signal) => {
-      const kmRadius = radNm * 1.852;
-      const degRadius = kmRadius / 111;
-      const latMin = lat - degRadius;
-      const latMax = lat + degRadius;
-      const lonMin = lon - degRadius;
-      const lonMax = lon + degRadius;
-      const url = `https://opensky-network.org/api/states/all?lamin=${latMin}&lamax=${latMax}&lomin=${lonMin}&lomax=${lonMax}`;
-      const res = await fetch(url, { signal });
-      if (!res.ok) throw new Error(`Direct OpenSky error: ${res.status}`);
-      const raw = await res.json();
-      const list = raw.states || [];
-      return list.map(item => ({
-        id: item[0],
-        flightNumber: (item[1] ?? '').trim(),
-        airlineCode: '',
-        icao24: item[0],
-        departure: { iata: '' },
-        arrival: { iata: '' },
-        latitude: item[6],
-        longitude: item[5],
-        altitudeFeet: item[7] ? item[7] * 3.28084 : undefined,
-        groundSpeedKts: item[9] ? item[9] * 1.94384 : undefined,
-        trueHeadingDeg: item[10],
-        isMilitary: false,
-        status: 'EnRoute',
-      }));
-    };
-
     const fetchFlights = async () => {
       if (document.hidden) return; // skip when tab not visible
       try {
-        let flightList = [];
-        try {
-          const res = await fetch(
-            `/api/flights?lat=${userPos.lat}&lon=${userPos.lng}&radius=${radius}`,
-            { signal: controller.signal },
-          );
-          if (res.ok) {
-            const data = await res.json();
-            // If the server proxy returned real data (not fallback demo)
-            if (Array.isArray(data) && !data.some(d => d.id === 'sample1')) {
-              flightList = data;
-            }
-          }
-        } catch (serverErr) {
-          console.warn('Server API failed, falling back to direct client fetch', serverErr);
+        const res = await fetch(
+          `/api/flights?lat=${userPos.lat}&lon=${userPos.lng}&radius=${radius}`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setFlights(data);
+          consecutiveErrors = 0; // reset on success
         }
-
-        // If server was blocked / returned DEMO, fetch directly from browser
-        if (flightList.length === 0) {
-          flightList = await fetchDirectOpenSky(userPos.lat, userPos.lng, radius, controller.signal);
-        }
-
-        setFlights(flightList);
-        consecutiveErrors = 0; // reset on success
       } catch (e) {
         if (e && e.name !== 'AbortError') {
           console.error('Failed to fetch flights:', e);
