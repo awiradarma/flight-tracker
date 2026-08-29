@@ -27,6 +27,16 @@ export default function SavedPlanesModal({ isOpen, onClose }) {
     setDetail(null);
   }, [isOpen]);
 
+  // Close modal on Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   const fetchDetail = async (plane) => {
     try {
       const res = await fetch(
@@ -42,14 +52,14 @@ export default function SavedPlanesModal({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={styles.overlay} onClick={onClose} role="dialog" aria-modal="true" aria-label="Saved planes list">
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <h2>Saved Planes</h2>
-        <button style={styles.closeBtn} onClick={onClose}>✖</button>
+        <button style={styles.closeBtn} onClick={onClose} aria-label="Close saved planes">✖</button>
         <ul style={styles.list}>
           {saved.map((p, idx) => (
             <li key={idx} style={styles.listItem}>
-              <span>{new Date(p.timestamp).toLocaleString()} – {p.flightNumber || p.icao24}</span>
+              <span>{new Date(p.timestamp * 1000).toLocaleString()} – {p.flightNumber || p.icao24}</span>
               <button style={styles.detailBtn} onClick={() => fetchDetail(p)}>
                 Details
               </button>

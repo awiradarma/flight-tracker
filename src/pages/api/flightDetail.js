@@ -7,9 +7,16 @@
  * Uses OpenSky "flights/aircraft" endpoint which provides estDepartureAirport and estArrivalAirport.
  */
 export default async function handler(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   const { icao24, timestamp } = req.query;
   if (!icao24 || !timestamp) {
     return res.status(400).json({ error: 'Missing required query parameters icao24 and timestamp' });
+  }
+  if (!/^[0-9a-f]{6}$/i.test(icao24)) {
+    return res.status(400).json({ error: 'Invalid icao24 format: must be 6-char hex string' });
   }
   const ts = Number(timestamp);
   if (isNaN(ts)) {
@@ -21,7 +28,10 @@ export default async function handler(req, res) {
   const url = `https://opensky-network.org/api/flights/aircraft?icao24=${icao24}&begin=${begin}&end=${end}`;
   console.log('Fetching flight details from OpenSky:', url);
   try {
-    const resp = await fetch(url);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
     if (!resp.ok) {
       console.error('OpenSky flight detail error', resp.status, await resp.text());
       return res.status(502).json({ error: 'Failed to fetch flight details from OpenSky' });

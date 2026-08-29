@@ -4,12 +4,14 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import SavedPlanesModal from './SavedPlanesModal';
 
-// Helper component to recenter map when userPos changes
+// Helper component to recenter map only once on initial load
 const RecenterMap = ({ lat, lng }) => {
   const map = useMap();
+  const hasCentered = useRef(false);
   useEffect(() => {
-    if (lat !== undefined && lng !== undefined) {
+    if (lat !== undefined && lng !== undefined && !hasCentered.current) {
       map.setView([lat, lng]);
+      hasCentered.current = true;
     }
   }, [lat, lng, map]);
   return null;
@@ -45,7 +47,7 @@ const MapBoundsListener = ({ setRadius }) => {
   return null;
 };
 
-// Override Leaflet's default marker icons (they’re now in /leaflet/)
+// Override Leaflet's default marker icons (they're now in /leaflet/)
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconUrl: '/leaflet/marker-icon.png',
@@ -53,16 +55,21 @@ L.Icon.Default.mergeOptions({
   shadowUrl: '/leaflet/marker-shadow.png',
 });
 
-// Simple aircraft icon that rotates based on heading
-const aircraftIcon = (heading) =>
-  new L.Icon({
-    iconUrl: '/aircraft.svg', // placeholder SVG in public/
+// Memoized aircraft icon with inline rotation via transform
+const iconCache = {};
+const aircraftIcon = (heading) => {
+  const rounded = Math.round(heading || 0);
+  if (iconCache[rounded]) return iconCache[rounded];
+  const icon = L.divIcon({
+    className: 'aircraft-icon',
+    html: `<img src="/aircraft.svg" style="width:32px;height:32px;transform:rotate(${rounded}deg)" alt="aircraft" />`,
     iconSize: [32, 32],
     iconAnchor: [16, 16],
     popupAnchor: [0, -16],
-    // Leaflet rotation via CSS class – you can add a style rule for .rotate-<deg>
-    className: `rotate-${heading}`,
   });
+  iconCache[rounded] = icon;
+  return icon;
+};
 
 // Throttle utility – ensures a function is called at most once every `limit` ms
 function throttle(fn, limit) {
@@ -137,12 +144,16 @@ export default function Map() {
   }, []);
 
   // -------------------------------------------------------------
-  // 2️⃣ Fetch flights whenever the user position changes
+  // 2️⃣ Fetch flights with backoff and visibility awareness
   // -------------------------------------------------------------
   useEffect(() => {
     if (!userPos) return;
     const controller = new AbortController();
+    let timeoutId = null;
+    let consecutiveErrors = 0;
+
     const fetchFlights = async () => {
+      if (document.hidden) return; // skip when tab not visible
       try {
         const res = await fetch(
           `/api/flights?lat=${userPos.lat}&lon=${userPos.lng}&radius=${radius}`,
@@ -151,15 +162,34 @@ export default function Map() {
         if (!res.ok) throw new Error('Failed to fetch flights');
         const data = await res.json();
         setFlights(data);
+        consecutiveErrors = 0; // reset on success
       } catch (e) {
-        if (e && e.name !== 'AbortError') console.error(e);
+        if (e && e.name !== 'AbortError') {
+          console.error(e);
+          consecutiveErrors++;
+        }
       }
     };
+
     fetchFlights();
-    const interval = setInterval(fetchFlights, 12000); // increased interval to respect rate limit
+    // Base interval 12s, with exponential backoff on errors (max 60s)
+    const getInterval = () => Math.min(12000 * Math.pow(2, consecutiveErrors), 60000);
+    const scheduleNext = () => {
+      timeoutId = setTimeout(() => {
+        fetchFlights().then(scheduleNext);
+      }, getInterval());
+    };
+    scheduleNext();
+
+    const handleVisibility = () => {
+      if (!document.hidden) fetchFlights(); // refresh when tab becomes visible
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
       controller.abort();
-      clearInterval(interval);
+      if (timeoutId) clearTimeout(timeoutId);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [userPos, radius]);
 
@@ -173,7 +203,7 @@ export default function Map() {
       center={center}
       zoom={13}
       style={{ height: '100vh', width: '100vw' }}
-      scrollWheelZoom={false}
+      scrollWheelZoom={true}
     >
       <RecenterMap lat={userPos?.lat} lng={userPos?.lng} />
       <MapBoundsListener setRadius={setRadius} />
@@ -183,7 +213,7 @@ export default function Map() {
       />
       {/* Saved planes button */}
       <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000 }}>
-        <button onClick={() => setShowSaved(true)} style={{ padding: '6px 12px' }}>Saved Planes</button>
+        <button onClick={() => setShowSaved(true)} style={{ padding: '6px 12px' }} aria-label="View saved planes">Saved Planes</button>
       </div>
       <SavedPlanesModal isOpen={showSaved} onClose={() => setShowSaved(false)} />
       {track.length > 0 && <Polyline positions={track} color="blue" />}
@@ -214,6 +244,7 @@ export default function Map() {
               <button onClick={(e) => {
                 e.stopPropagation();
                 const saved = JSON.parse(window.localStorage.getItem('savedPlanes') || '[]');
+                if (saved.some(s => s.icao24 === f.icao24)) return; // prevent duplicates
                 saved.push({ icao24: f.icao24, flightNumber: f.flightNumber || f.icao24, timestamp: Math.floor(Date.now() / 1000) });
                 window.localStorage.setItem('savedPlanes', JSON.stringify(saved));
               }}>Save plane</button>

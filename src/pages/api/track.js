@@ -7,8 +7,7 @@
  * [time, latitude, longitude, baro_altitude, true_track, on_ground]
  *
  * Uses OAuth2 client‑credentials flow. Provide OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET
- * via environment variables (or fallback to the client ID you gave). The token is cached
- * in memory for its lifetime (default 30 min).
+ * via environment variables. The token is cached in memory for its lifetime (default 30 min).
  */
 
 // In‑memory token cache
@@ -20,7 +19,11 @@ async function getAccessToken() {
     return cachedToken.accessToken;
   }
 
-  const clientId = process.env.OPENSKY_CLIENT_ID || 'awiradarma@gmail.com-api-client';
+  const clientId = process.env.OPENSKY_CLIENT_ID;
+  if (!clientId) {
+    console.error('OPENSKY_CLIENT_ID is not set');
+    throw new Error('OpenSky client ID missing');
+  }
   const clientSecret = process.env.OPENSKY_CLIENT_SECRET;
   if (!clientSecret) {
     console.error('OPENSKY_CLIENT_SECRET is not set');
@@ -51,7 +54,7 @@ async function getAccessToken() {
   return cachedToken.accessToken;
 }
 
-// ---------- track cache (30 s) ----------
+// ---------- track cache (30 s) ----------
 const trackCache = new Map(); // icao24 → { path, expiresAt }
 
 async function getTrack(icao24, accessToken) {
@@ -74,15 +77,31 @@ async function getTrack(icao24, accessToken) {
 
   const data = await resp.json();
   const path = data.path || [];
-  // cache for 30 seconds
+
+  // Evict expired entries if cache is getting large
+  if (trackCache.size > 500) {
+    const now = Date.now();
+    for (const [key, val] of trackCache) {
+      if (val.expiresAt < now) trackCache.delete(key);
+    }
+  }
+
+  // cache for 30 seconds
   trackCache.set(icao24, { path, expiresAt: Date.now() + 30_000 });
   return path;
 }
 
 export default async function handler(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   const { icao24 } = req.query;
   if (!icao24) {
     return res.status(400).json({ error: 'Missing required icao24 parameter' });
+  }
+  if (!/^[0-9a-f]{6}$/i.test(icao24)) {
+    return res.status(400).json({ error: 'Invalid icao24 format: must be 6-char hex string' });
   }
 
   let accessToken;
