@@ -55,19 +55,31 @@ L.Icon.Default.mergeOptions({
   shadowUrl: '/leaflet/marker-shadow.png',
 });
 
-// Memoized aircraft icon with inline rotation via transform
+// Memoized aircraft icon with inline rotation via transform and custom color
 const iconCache = {};
-const aircraftIcon = (heading) => {
+const aircraftIcon = (heading, isTracked = false) => {
   const rounded = Math.round(heading || 0);
-  if (iconCache[rounded]) return iconCache[rounded];
+  const cacheKey = `${rounded}_${isTracked ? 'tracked' : 'default'}`;
+  if (iconCache[cacheKey]) return iconCache[cacheKey];
+
+  const fillColor = isTracked ? '#f59e0b' : '#1e3a5f'; // Amber gold for tracked, navy blue for default
+  const strokeColor = isTracked ? '#b45309' : '#0f1f33';
+  const glowStyle = isTracked ? 'filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.9));' : 'filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));';
+
+  const svgHtml = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="34" height="34" style="transform:rotate(${rounded}deg);${glowStyle}">
+      <path d="M32 4 L36 28 L56 38 L56 42 L36 36 L36 52 L44 56 L44 60 L32 56 L20 60 L20 56 L28 52 L28 36 L8 42 L8 38 L28 28 Z" fill="${fillColor}" stroke="${strokeColor}" stroke-width="2" stroke-linejoin="round"/>
+    </svg>
+  `;
+
   const icon = L.divIcon({
     className: 'aircraft-icon',
-    html: `<img src="/aircraft.svg" style="width:32px;height:32px;transform:rotate(${rounded}deg)" alt="aircraft" />`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-    popupAnchor: [0, -16],
+    html: svgHtml,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    popupAnchor: [0, -17],
   });
-  iconCache[rounded] = icon;
+  iconCache[cacheKey] = icon;
   return icon;
 };
 
@@ -108,7 +120,47 @@ export default function Map() {
   const [filterType, setFilterType] = useState('all'); // 'all' | 'commercial' | 'military' | 'private'
   const [searchQuery, setSearchQuery] = useState('');
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
+  const [savedPlanes, setSavedPlanes] = useState([]);
   const watchId = useRef(null);
+
+  // Load saved planes from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem('savedPlanes');
+      if (raw) setSavedPlanes(JSON.parse(raw));
+    } catch (e) {
+      console.error('Failed to parse savedPlanes from localStorage', e);
+    }
+  }, []);
+
+  const toggleTrackPlane = (flight) => {
+    const icao = flight.icao24.toLowerCase();
+    setSavedPlanes(prev => {
+      const exists = prev.some(p => p.icao24.toLowerCase() === icao);
+      let updated;
+      if (exists) {
+        updated = prev.filter(p => p.icao24.toLowerCase() !== icao);
+      } else {
+        updated = [
+          {
+            icao24: flight.icao24,
+            flightNumber: flight.flightNumber || flight.icao24,
+            timestamp: Math.floor(Date.now() / 1000),
+          },
+          ...prev
+        ];
+      }
+      try {
+        window.localStorage.setItem('savedPlanes', JSON.stringify(updated));
+      } catch (err) {
+        console.error('Failed to save planes to localStorage', err);
+      }
+      return updated;
+    });
+  };
+
+  // Set of tracked icao24 hex codes for quick O(1) lookup
+  const trackedIcaoSet = new Set(savedPlanes.map(p => p.icao24.toLowerCase()));
 
   // -------------------------------------------------------------
   // 1️⃣ Geolocation watch – keep user position up‑to‑date
@@ -382,22 +434,49 @@ export default function Map() {
           )}
         </div>
 
-        {/* Right Side: Saved Planes */}
+        {/* Right Side: Saved / Tracked Planes */}
         <div style={{ pointerEvents: 'auto' }}>
           <button 
             onClick={() => setShowSaved(true)} 
-            style={{ padding: '6px 12px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', fontSize: '12px', whiteSpace: 'nowrap' }}
+            style={{ padding: '6px 12px', background: savedPlanes.length > 0 ? '#b45309' : '#1e3a5f', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', fontSize: '12px', whiteSpace: 'nowrap' }}
             aria-label="View saved planes"
           >
-            ⭐ Saved ({JSON.parse(typeof window !== 'undefined' ? window.localStorage?.getItem('savedPlanes') || '[]' : '[]').length})
+            ★ Tracked ({savedPlanes.length})
           </button>
         </div>
       </div>
 
-      <SavedPlanesModal isOpen={showSaved} onClose={() => setShowSaved(false)} />
+      <SavedPlanesModal 
+        isOpen={showSaved} 
+        onClose={() => setShowSaved(false)} 
+        onRemove={(icao) => {
+          setSavedPlanes(prev => {
+            const updated = prev.filter(p => p.icao24.toLowerCase() !== icao.toLowerCase());
+            try { window.localStorage.setItem('savedPlanes', JSON.stringify(updated)); } catch (e) {}
+            return updated;
+          });
+        }}
+      />
       
-      {/* Live Flight Path Trail for Selected Aircraft */}
-      {selectedBreadcrumbs.length > 1 && (
+      {/* Live Flight Path Trails for ALL Tracked Planes simultaneously */}
+      {savedPlanes.map(p => {
+        const path = historyTracks[p.icao24.toLowerCase()] || historyTracks[p.icao24.toUpperCase()] || [];
+        if (path.length < 2) return null;
+        const isSelected = selectedFlight?.icao24?.toLowerCase() === p.icao24?.toLowerCase();
+        return (
+          <Polyline 
+            key={p.icao24} 
+            positions={path} 
+            color={isSelected ? '#2563eb' : '#f59e0b'} 
+            weight={isSelected ? 5 : 3.5} 
+            opacity={isSelected ? 0.9 : 0.75} 
+            dashArray={isSelected ? undefined : '5, 5'}
+          />
+        );
+      })}
+
+      {/* Selected Aircraft Path (if not already tracked) */}
+      {selectedFlight && !trackedIcaoSet.has(selectedFlight.icao24?.toLowerCase()) && selectedBreadcrumbs.length > 1 && (
         <Polyline positions={selectedBreadcrumbs} color="#2563eb" weight={4} opacity={0.85} />
       )}
 
@@ -407,64 +486,80 @@ export default function Map() {
         </Marker>
       )}
 
-      {displayedFlights.map((f) => (
-        <Marker
-          key={f.id}
-          position={[f.latitude, f.longitude]}
-          icon={aircraftIcon(f.trueHeadingDeg)}
-          eventHandlers={{
-            click: () => handlePlaneSelect(f),
-          }}
-        >
-          <Popup>
-            <div style={{ minWidth: '200px', lineHeight: '1.4' }}>
-              <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '2px' }}>
-                {f.flightNumber || f.icao24}
-              </div>
-
-              {selectedFlight?.id === f.id && flightDetail?.airline?.name && (
-                <div style={{ color: '#2563eb', fontWeight: 600, fontSize: '13px', marginBottom: '4px' }}>
-                  ✈️ {flightDetail.airline.name}
+      {displayedFlights.map((f) => {
+        const isTracked = trackedIcaoSet.has(f.icao24?.toLowerCase());
+        return (
+          <Marker
+            key={f.id}
+            position={[f.latitude, f.longitude]}
+            icon={aircraftIcon(f.trueHeadingDeg, isTracked)}
+            eventHandlers={{
+              click: () => handlePlaneSelect(f),
+            }}
+          >
+            <Popup>
+              <div style={{ minWidth: '210px', lineHeight: '1.4' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                  <span style={{ fontSize: '15px', fontWeight: 'bold', color: isTracked ? '#b45309' : '#1e3a5f' }}>
+                    {f.flightNumber || f.icao24}
+                  </span>
+                  {isTracked && (
+                    <span style={{ fontSize: '10px', background: '#fef3c7', color: '#b45309', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                      ★ TRACKING
+                    </span>
+                  )}
                 </div>
-              )}
 
-              {/* Aircraft Model & Tail Number Details */}
-              {selectedFlight?.id === f.id && flightDetail?.aircraft && (
-                <div style={{ background: '#f8fafc', padding: '6px 8px', borderRadius: '4px', margin: '4px 0', fontSize: '12px', color: '#334155' }}>
-                  <div><strong>Model:</strong> {flightDetail.aircraft.manufacturer} {flightDetail.aircraft.type || flightDetail.aircraft.icaoType}</div>
-                  {flightDetail.aircraft.registration && <div><strong>Tail:</strong> {flightDetail.aircraft.registration}</div>}
+                {selectedFlight?.id === f.id && flightDetail?.airline?.name && (
+                  <div style={{ color: '#2563eb', fontWeight: 600, fontSize: '13px', marginBottom: '4px' }}>
+                    ✈️ {flightDetail.airline.name}
+                  </div>
+                )}
+
+                {/* Aircraft Model & Tail Number Details */}
+                {selectedFlight?.id === f.id && flightDetail?.aircraft && (
+                  <div style={{ background: '#f8fafc', padding: '6px 8px', borderRadius: '4px', margin: '4px 0', fontSize: '12px', color: '#334155' }}>
+                    <div><strong>Model:</strong> {flightDetail.aircraft.manufacturer} {flightDetail.aircraft.type || flightDetail.aircraft.icaoType}</div>
+                    {flightDetail.aircraft.registration && <div><strong>Tail:</strong> {flightDetail.aircraft.registration}</div>}
+                  </div>
+                )}
+
+                <div style={{ fontSize: '12px', color: '#334155', marginTop: '4px' }}>
+                  <div><strong>Alt:</strong> {typeof f.altitudeFeet === 'number' ? Math.round(f.altitudeFeet).toLocaleString() : 'N/A'} ft</div>
+                  <div><strong>Speed:</strong> {typeof f.groundSpeedKts === 'number' ? Math.round(f.groundSpeedKts) : 'N/A'} kt</div>
+                  <div><strong>Heading:</strong> {Math.round(f.trueHeadingDeg || 0)}°</div>
+                  {f.isMilitary && <div style={{ color: '#dc2626', fontWeight: 'bold', marginTop: '2px' }}>🎖️ Military Aircraft</div>}
                 </div>
-              )}
 
-              <div style={{ fontSize: '12px', color: '#334155', marginTop: '4px' }}>
-                <div><strong>Alt:</strong> {typeof f.altitudeFeet === 'number' ? Math.round(f.altitudeFeet).toLocaleString() : 'N/A'} ft</div>
-                <div><strong>Speed:</strong> {typeof f.groundSpeedKts === 'number' ? Math.round(f.groundSpeedKts) : 'N/A'} kt</div>
-                <div><strong>Heading:</strong> {Math.round(f.trueHeadingDeg || 0)}°</div>
-                {f.isMilitary && <div style={{ color: '#dc2626', fontWeight: 'bold', marginTop: '2px' }}>🎖️ Military Aircraft</div>}
+                <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
+                  <button
+                    style={{
+                      padding: '5px 10px',
+                      background: isTracked ? '#ef4444' : '#f59e0b',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleTrackPlane(f);
+                    }}
+                  >
+                    {isTracked ? '✕ Stop Tracking' : '★ Track Plane'}
+                  </button>
+                </div>
               </div>
-
-              <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
-                <button
-                  style={{ padding: '4px 8px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const saved = JSON.parse(window.localStorage.getItem('savedPlanes') || '[]');
-                    if (saved.some(s => s.icao24 === f.icao24)) return;
-                    saved.push({
-                      icao24: f.icao24,
-                      flightNumber: f.flightNumber || f.icao24,
-                      timestamp: Math.floor(Date.now() / 1000)
-                    });
-                    window.localStorage.setItem('savedPlanes', JSON.stringify(saved));
-                  }}
-                >
-                  ⭐ Save plane
-                </button>
-              </div>
-            </div>
-          </Popup>
-        </Marker>
-      ))}
+            </Popup>
+          </Marker>
+        );
+      })}
     </MapContainer>
   );
 }

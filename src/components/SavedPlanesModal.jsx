@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
  * Modal that shows a list of saved planes (from localStorage) sorted by most recent.
  * Clicking a plane fetches detailed flight info via /api/flightDetail and displays it.
  */
-export default function SavedPlanesModal({ isOpen, onClose }) {
+export default function SavedPlanesModal({ isOpen, onClose, onRemove }) {
   const [saved, setSaved] = useState([]); // array of saved plane objects
   const [detail, setDetail] = useState(null); // detailed info for selected plane
 
@@ -37,6 +37,18 @@ export default function SavedPlanesModal({ isOpen, onClose }) {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  const handleRemove = (icao) => {
+    const updated = saved.filter(p => p.icao24.toLowerCase() !== icao.toLowerCase());
+    setSaved(updated);
+    try {
+      window.localStorage.setItem('savedPlanes', JSON.stringify(updated));
+    } catch (e) {}
+    if (onRemove) onRemove(icao);
+    if (detail?.plane?.icao24?.toLowerCase() === icao.toLowerCase()) {
+      setDetail(null);
+    }
+  };
+
   const fetchDetail = async (plane) => {
     try {
       const res = await fetch(
@@ -54,11 +66,11 @@ export default function SavedPlanesModal({ isOpen, onClose }) {
   return (
     <div style={styles.overlay} onClick={onClose} role="dialog" aria-modal="true" aria-label="Saved planes list">
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <h2>⭐ Saved Planes</h2>
-        <button style={styles.closeBtn} onClick={onClose} aria-label="Close saved planes">✖</button>
+        <h2>★ Tracked Planes</h2>
+        <button style={styles.closeBtn} onClick={onClose} aria-label="Close tracked planes">✖</button>
         <ul style={styles.list}>
           {saved.length === 0 ? (
-            <li style={{ padding: '1rem', textAlign: 'center', color: '#64748b' }}>No saved planes yet</li>
+            <li style={{ padding: '1rem', textAlign: 'center', color: '#64748b' }}>No tracked planes yet. Click "★ Track Plane" on any flight.</li>
           ) : (
             saved.map((p, idx) => (
               <li key={idx} style={styles.listItem}>
@@ -66,9 +78,18 @@ export default function SavedPlanesModal({ isOpen, onClose }) {
                   <div style={{ fontWeight: 600, color: '#1e3a5f' }}>{p.flightNumber || p.icao24}</div>
                   <div style={{ fontSize: '11px', color: '#64748b' }}>{new Date(p.timestamp * 1000).toLocaleString()}</div>
                 </div>
-                <button style={styles.detailBtn} onClick={() => fetchDetail(p)}>
-                  Details
-                </button>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button style={styles.detailBtn} onClick={() => fetchDetail(p)}>
+                    Info
+                  </button>
+                  <button 
+                    style={{ ...styles.detailBtn, background: '#fee2e2', color: '#dc2626' }} 
+                    onClick={() => handleRemove(p.icao24)}
+                    title="Remove from tracking"
+                  >
+                    ✕
+                  </button>
+                </div>
               </li>
             ))
           )}
