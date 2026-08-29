@@ -157,7 +157,22 @@ export default function Map() {
         if (!res.ok) throw new Error(`API error: ${res.status}`);
         const data = await res.json();
         if (Array.isArray(data)) {
-          setFlights(data);
+          const now = Date.now();
+          setFlights(prevFlights => {
+            const flightMap = new Map();
+            // Retain recent flights from previous poll (grace period: 35 seconds)
+            prevFlights.forEach(p => {
+              if (now - (p._lastSeen || now) < 35000) {
+                flightMap.set(p.id, p);
+              }
+            });
+            // Update with fresh flight data
+            data.forEach(f => {
+              flightMap.set(f.id, { ...f, _lastSeen: now });
+            });
+            return Array.from(flightMap.values());
+          });
+
           // Accumulate live breadcrumb trails for each aircraft
           setHistoryTracks(prev => {
             const next = { ...prev };
