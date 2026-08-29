@@ -4,16 +4,26 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import SavedPlanesModal from './SavedPlanesModal';
 
-// Helper component to recenter map only once on initial load
-const RecenterMap = ({ lat, lng }) => {
+// Helper component to center and fly to locations dynamically
+const MapController = ({ targetPos, initialPos }) => {
   const map = useMap();
-  const hasCentered = useRef(false);
+  const hasInitialized = useRef(false);
+
+  // Initial user position centering
   useEffect(() => {
-    if (lat !== undefined && lng !== undefined && !hasCentered.current) {
-      map.setView([lat, lng]);
-      hasCentered.current = true;
+    if (initialPos?.lat !== undefined && initialPos?.lng !== undefined && !hasInitialized.current) {
+      map.setView([initialPos.lat, initialPos.lng], 12);
+      hasInitialized.current = true;
     }
-  }, [lat, lng, map]);
+  }, [initialPos, map]);
+
+  // Target position flyTo on search / jump
+  useEffect(() => {
+    if (targetPos?.lat !== undefined && targetPos?.lng !== undefined) {
+      map.flyTo([targetPos.lat, targetPos.lng], targetPos.zoom || 12, { duration: 1.5 });
+    }
+  }, [targetPos, map]);
+
   return null;
 };
 
@@ -111,8 +121,13 @@ const fetchFlightDetail = async (flight, setDetail) => {
 
 export default function FlightMap() {
   const [userPos, setUserPos] = useState(null);
+  const [mapCenter, setMapCenter] = useState(null); // active view center
+  const [targetFlyPos, setTargetFlyPos] = useState(null); // animated jump target
+  const [locationQuery, setLocationQuery] = useState('');
+  const [isLocSearching, setIsLocSearching] = useState(false);
+  const [locationError, setLocationError] = useState('');
   const [flights, setFlights] = useState([]);
-  const [radius, setRadius] = useState(10); // nautical miles, will be updated from map bounds
+  const [radius, setRadius] = useState(15); // nautical miles, will be updated from map bounds
   const [showSaved, setShowSaved] = useState(false);
   const [selectedFlight, setSelectedFlight] = useState(null);
   const [flightDetail, setFlightDetail] = useState(null);
@@ -162,24 +177,67 @@ export default function FlightMap() {
   // Set of tracked icao24 hex codes for quick O(1) lookup
   const trackedIcaoSet = new Set(savedPlanes.map(p => p.icao24.toLowerCase()));
 
+  // Geocode location search (OpenStreetMap Nominatim)
+  const handleLocationSearch = async (e) => {
+    if (e) e.preventDefault();
+    if (!locationQuery.trim()) return;
+    setIsLocSearching(true);
+    setLocationError('');
+    try {
+      const q = encodeURIComponent(locationQuery.trim());
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`, {
+        headers: { 'Accept-Language': 'en' }
+      });
+      if (!res.ok) throw new Error('Geocoding request failed');
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const item = data[0];
+        const newLat = parseFloat(item.lat);
+        const newLon = parseFloat(item.lon);
+        const newPos = { lat: newLat, lng: newLon };
+        setMapCenter(newPos);
+        setTargetFlyPos({ lat: newLat, lng: newLon, zoom: 12 });
+        setLocationError('');
+      } else {
+        setLocationError('Location not found. Try a city or airport name.');
+      }
+    } catch (err) {
+      console.error('Location search error', err);
+      setLocationError('Search error. Please try again.');
+    } finally {
+      setIsLocSearching(false);
+    }
+  };
+
   // -------------------------------------------------------------
   // 1️⃣ Geolocation watch – keep user position up‑to‑date
   // -------------------------------------------------------------
   useEffect(() => {
     if (!navigator.geolocation) {
-      setUserPos({ lat: 37.7749, lng: -122.4194 });
+      const def = { lat: 37.7749, lng: -122.4194 };
+      setUserPos(def);
+      setMapCenter(def);
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (pos) => {
+        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUserPos(p);
+        setMapCenter(prev => prev || p);
+      },
       (err) => {
         console.warn('Geolocation init error', err);
-        setUserPos({ lat: 37.7749, lng: -122.4194 });
+        const def = { lat: 37.7749, lng: -122.4194 };
+        setUserPos(def);
+        setMapCenter(prev => prev || def);
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
     watchId.current = navigator.geolocation.watchPosition(
-      (pos) => setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (pos) => {
+        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUserPos(p);
+      },
       (err) => {
         console.warn('Geolocation watch error', err);
       },
@@ -191,10 +249,12 @@ export default function FlightMap() {
   }, []);
 
   // -------------------------------------------------------------
-  // 2️⃣ Fetch flights with backoff and visibility awareness
+  // 2️⃣ Fetch flights around active mapCenter with backoff
   // -------------------------------------------------------------
+  const activeCenter = mapCenter || userPos;
+
   useEffect(() => {
-    if (!userPos) return;
+    if (!activeCenter) return;
     const controller = new AbortController();
     let timeoutId = null;
     let consecutiveErrors = 0;
@@ -203,7 +263,7 @@ export default function FlightMap() {
       if (document.hidden) return; // skip when tab not visible
       try {
         const res = await fetch(
-          `/api/flights?lat=${userPos.lat}&lon=${userPos.lng}&radius=${radius}`,
+          `/api/flights?lat=${activeCenter.lat}&lon=${activeCenter.lng}&radius=${radius}`,
           { signal: controller.signal },
         );
         if (!res.ok) throw new Error(`API error: ${res.status}`);
@@ -322,49 +382,86 @@ export default function FlightMap() {
   // 3️⃣ Render map
   // -------------------------------------------------------------
   const defaultCenter = [37.7749, -122.4194];
-  const center = userPos ? [userPos.lat, userPos.lng] : defaultCenter;
+  const center = activeCenter ? [activeCenter.lat, activeCenter.lng] : defaultCenter;
   return (
     <MapContainer
       center={center}
-      zoom={13}
+      zoom={12}
       style={{ height: '100vh', width: '100vw' }}
       scrollWheelZoom={true}
     >
-      <RecenterMap lat={userPos?.lat} lng={userPos?.lng} />
+      <MapController targetPos={targetFlyPos} initialPos={userPos} />
       <MapBoundsListener setRadius={setRadius} />
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution="&copy; <a href='https://openstreetmap.org'>OpenStreetMap</a> contributors"
       />
       
-      {/* Top Floating Control Bar (Search, Category Filters, Saved Planes) */}
+      {/* Top Floating Control Bar (Location, Search, Filters, Tracked) */}
       <div style={{ position: 'absolute', top: 10, left: 10, right: 10, zIndex: 1000, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', pointerEvents: 'none', gap: '8px' }}>
-        {/* Left Side: Collapsible Filter / Search Pill */}
-        <div style={{ pointerEvents: 'auto', background: 'rgba(255, 255, 255, 0.96)', borderRadius: '10px', boxShadow: '0 4px 14px rgba(0,0,0,0.18)', maxWidth: 'calc(100vw - 120px)', backdropFilter: 'blur(8px)', overflow: 'hidden' }}>
+        {/* Left Side: Collapsible Filter / Search / Location Drawer */}
+        <div style={{ pointerEvents: 'auto', background: 'rgba(255, 255, 255, 0.96)', borderRadius: '10px', boxShadow: '0 4px 14px rgba(0,0,0,0.18)', maxWidth: 'min(380px, calc(100vw - 120px))', backdropFilter: 'blur(8px)', overflow: 'hidden' }}>
           {/* Header Row: Current active filter tag + Toggle button */}
           <div 
             onClick={() => setIsFilterExpanded(!isFilterExpanded)}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', cursor: 'pointer', userSelect: 'none' }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '6px 10px', cursor: 'pointer', userSelect: 'none' }}
           >
             <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e3a5f' }}>
-              🔍 {filterType === 'all' ? `All (${flights.length})` : filterType === 'commercial' ? `✈️ Commercial (${commercialCount})` : filterType === 'military' ? `🎖️ Military (${militaryCount})` : `🛩️ Private (${privateCount})`}
+              🔍 {filterType === 'all' ? `All (${flights.length})` : filterType === 'commercial' ? `✈️ Comm (${commercialCount})` : filterType === 'military' ? `🎖️ Mil (${militaryCount})` : `🛩️ Priv (${privateCount})`}
             </span>
             <span style={{ fontSize: '11px', color: '#64748b', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px' }}>
-              {isFilterExpanded ? '▲ Hide' : '▼ Filter'}
+              {isFilterExpanded ? '▲ Hide' : '▼ Location & Filters'}
             </span>
           </div>
 
-          {/* Expanded Drawer: Search Input & Category Filters */}
+          {/* Expanded Drawer */}
           {isFilterExpanded && (
             <div style={{ padding: '8px 10px 10px 10px', borderTop: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* 1. Location Search Form */}
+              <form onSubmit={handleLocationSearch} style={{ display: 'flex', gap: '4px' }}>
+                <input
+                  type="text"
+                  placeholder="📍 City, Airport (e.g. Dallas, JFK, LHR)..."
+                  value={locationQuery}
+                  onChange={(e) => setLocationQuery(e.target.value)}
+                  style={{ flex: 1, padding: '5px 8px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '6px', outline: 'none' }}
+                />
+                <button
+                  type="submit"
+                  disabled={isLocSearching}
+                  style={{ padding: '5px 10px', fontSize: '11px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}
+                >
+                  {isLocSearching ? '...' : 'Go'}
+                </button>
+                {userPos && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMapCenter(userPos);
+                      setTargetFlyPos({ lat: userPos.lat, lng: userPos.lng, zoom: 12 });
+                    }}
+                    title="Recenter to My GPS Location"
+                    style={{ padding: '5px 8px', fontSize: '11px', background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer' }}
+                  >
+                    🎯 GPS
+                  </button>
+                )}
+              </form>
+
+              {locationError && (
+                <div style={{ color: '#dc2626', fontSize: '11px', lineHeight: '1.2' }}>{locationError}</div>
+              )}
+
+              {/* 2. Plane Search Input */}
               <input
                 type="text"
-                placeholder="Search flight / tail / type..."
+                placeholder="🔎 Filter flight / tail / type..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                style={{ padding: '6px 8px', fontSize: '12px', border: '1px solid #cbd5e1', borderRadius: '6px', outline: 'none', width: '100%', boxSizing: 'border-box' }}
+                style={{ padding: '5px 8px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '6px', outline: 'none', width: '100%', boxSizing: 'border-box' }}
               />
 
+              {/* 3. Category Filter Buttons */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                 <button
                   onClick={() => setFilterType('all')}
